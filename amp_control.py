@@ -1,57 +1,26 @@
-from __future__ import division
+#!/usr/bin/python3
 
 import serial
-import time
 
 
-class AmpZone(object):
+class Amp(object):
     MAX_VOLUME = 38
     MIN_TREBLE = 0
     MAX_TREBLE = 14
 
-    def __init__(self, zone, name=None, port='/dev/ttyUSB0', baudrate=9600):
-        self.name = name
-        self.zone = zone
+    def __init__(self, port='/dev/ttyUSB0', baudrate=9600):
         self.port = port
         self.baudrate = baudrate
+        self.ser = None
         self._setup_serial()
 
-        self.power = None
-        self.volume = None
-        self.treble = None
-        self.balance = None
-        self.mute = None
-        self.bass = None
-        self.source = None
-        self.keypad_status = None
-        self.DT_status = None
-        self.PA_control = None
+        self.status = None
 
         self.update_status()
 
     def __str__(self):
 
-        status_string = "Zone: {}; " \
-                        "Name: {}; " \
-                        "Power: {}; " \
-                        "Mute: {}; " \
-                        "Volume: {}; " \
-                        "Source: {}; " \
-                        "Bass: {}; " \
-                        "Treble: {};" \
-                        "Balance; {}; " \
-                        "Keypad: {};".format(self.zone,
-                                             self.name,
-                                             self.power,
-                                             self.mute,
-                                             self.volume,
-                                             self.source,
-                                             self.bass,
-                                             self.treble,
-                                             self.balance,
-                                             self.keypad_status)
-
-        return status_string
+        return str(self.status)
 
     def _setup_serial(self):
         self.ser = serial.Serial()
@@ -61,29 +30,39 @@ class AmpZone(object):
 
     def _send_command(self, command):
         self.ser.open()
-        self.ser.write(command)
+        self.ser.write(command.encode('utf-8'))
         self.ser.close()
 
-    def _query_zone(self):
+    def query_zone(self, zone):
         self.ser.open()
-        command = '?1%s\n\r' % self.zone
+        command = '?1%s\n\r' % zone
         self.ser.write(command)
         response = self.ser.read(30)
         self.ser.close()
 
         return response
 
-    def set_power(self, power_setting):
+    def set_zone_power(self, zone, power_setting):
 
-        if power_setting is True or power_setting.lower() == 'on':
-            command = '<1%sPR%s\r\n' % (self.zone, '01')
+        if power_setting is True:
+            command = '<1%sPR0%s\r\n' % (zone, '1')
             self._send_command(command)
 
-        elif power_setting is False or power_setting.lower() == 'off':
-            command = '<1%sPR%s\r\n' % (self.zone, '00')
+        elif power_setting is False:
+            command = '<1%sPR0%s\r\n' % (zone, '0')
             self._send_command(command)
 
-    def set_volume(self, new_volume):
+    def set_zone_mute(self, zone, mute_setting):
+
+        if mute_setting is True:
+            command = '<1%sMU0%s\r\n' % (zone, '1')
+            self._send_command(command)
+
+        elif mute_setting is False:
+            command = '<1%sMU0%s\r\n' % (zone, '0')
+            self._send_command(command)
+
+    def set_zone_volume(self, zone, new_volume):
 
         if new_volume > 38:
             new_volume = 38
@@ -91,26 +70,63 @@ class AmpZone(object):
             new_volume = 0
 
         if new_volume < 10:
-            vol = "0" + str(new_volume)
+            new_volume = "0" + str(new_volume)
 
-        command = '<1%sVO%s\r\n' % (self.zone, new_volume)
+        command = '<1%sVO%s\r\n' % (zone, new_volume)
 
         self._send_command(command)
 
-    def set_source(self, new_source):
-        print(new_source)
+    def set_zone_source(self, zone, new_source):
 
         if 1 > int(new_source) < 6:
             raise ValueError("Source must be between 1 and 6")
         else:
-            command = '<1%sCH0%s\r\n' % (self.zone, new_source)
-            
+            command = '<1%sCH0%s\r\n' % (zone, new_source)
+
             self._send_command(command)
 
+    def set_zone_bass(self, zone, new_bass):
+
+        if new_bass > 7:
+            new_bass = 7
+        elif new_bass < -7:
+            new_bass = -7
+
+        new_bass = new_bass + 7
+
+        if new_bass < 10:
+            new_bass = "0" + str(new_bass)
+
+        command = '<1%sBS%s\r\n' % (zone, new_bass)
+        self._send_command(command)
+
+    def set_zone_treble(self, zone, new_treble):
+
+        if new_treble > 7:
+            new_treble = 7
+        elif new_treble < -7:
+            new_treble = -7
+
+        new_treble = new_treble + 7
+
+        if new_treble < 10:
+            new_treble = "0" + str(new_treble)
+
+        command = '<1%sTR%s\r\n' % (zone, new_treble)
+        self._send_command(command)
+
     def update_status(self):
-        response = self._query_zone()
-        parsed_response = self._parse_response(response)
-        self._set_status(parsed_response)
+        responses = self._query_zones()
+        parsed_responses = self._parse_responses(responses)
+
+        self.status = parsed_responses
+
+    def get_status(self):
+
+        responses = self._query_zones()
+        parsed_responses = self._parse_responses(responses)
+
+        return parsed_responses
 
     def _set_status(self, parsed_response):
 
@@ -147,43 +163,58 @@ class AmpZone(object):
         self.balance = int(res['balance']) - 10
         self.source = int(res['source'])
 
+    def _query_zones(self):
+        zones = [1, 2, 3, 4, 5, 6]
+
+        self.ser.open()
+        responses = []
+
+        for zone in zones:
+            command = '?1%s\n\r' % zone
+            self.ser.write(command.encode('utf-8'))
+            cmd = self.ser.readline()
+            res = self.ser.readline()
+            responses.append(res.decode('utf-8'))
+
+        self.ser.close()
+
+        return responses
+
     @staticmethod
-    def _parse_response(response):
+    def _parse_responses(responses):
 
-        command = response[:4]
-        reply = response[7:]
+        parsed_responses = []
 
-        main_unit = reply[0]
-        zone = reply[1]
-        PA_control = reply[2:4]
-        power_control = reply[4:6]
-        mute = reply[6:8]
-        DT_status = reply[8:10]
-        volume = reply[10:12]
-        treble = reply[12:14]
-        bass = reply[14:16]
-        balance = reply[16:18]
-        source = reply[18:20]
-        keypad_status = reply[20:22]
+        for res in responses:
 
-        return dict(main_unit=main_unit,
-                    zone=zone,
-                    PA_control=PA_control,
-                    power_control=power_control,
-                    mute=mute,
-                    DT_status=DT_status,
-                    volume=volume,
-                    treble=treble,
-                    bass=bass,
-                    balance=balance,
-                    source=source,
-                    keypad_status=keypad_status)
+            res = res[2:]
 
-zone5 = AmpZone(5)
-zone5.update_status()
-print(zone5)
+            unit = int(res[0])
+            zone = int(res[1])
+            PA = int(res[2:4])
+            power = int(res[4:6])
+            mute = int(res[6:8])
+            DT = int(res[8:10])
+            volume = int(res[10:12])
+            treble = int(res[12:14])
+            bass = int(res[14:16])
+            balance = int(res[16:18])
+            source = int(res[18:20])
+            keypad = int(res[20:22])
 
-zone5.set_source(6)
+            parsed_res = dict(unit=unit,
+                              zone=zone,
+                              PA=PA,
+                              power=power,
+                              mute=mute,
+                              DT=DT,
+                              volume=volume,
+                              treble=treble,
+                              bass=bass,
+                              balance=balance,
+                              source=source,
+                              keypad=keypad)
 
-zone5.update_status()
-print(zone5)
+            parsed_responses.append(parsed_res)
+
+        return parsed_responses
